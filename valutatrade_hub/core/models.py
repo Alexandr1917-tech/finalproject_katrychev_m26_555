@@ -2,6 +2,8 @@ import hashlib
 import secrets
 from datetime import datetime
 
+from valutatrade_hub.core.exceptions import InsufficientFundsError
+
 
 class User:
     def __init__(self, user_id, username, password, salt=None):
@@ -90,7 +92,10 @@ class Wallet:
     def withdraw(self, amount):
         self._validate_amount(amount)
         if amount > self._balance:
-            raise ValueError("Недостаточно средств.")
+            raise InsufficientFundsError(
+                f"Недостаточно средств: доступно {self._balance:.2f} {self._currency_code}, " # noqa: E501
+                f"требуется {amount:.2f} {self._currency_code}"
+            )
         self.balance = self._balance - amount
 
     def get_balance_info(self):
@@ -118,7 +123,6 @@ class Portfolio:
     def wallets(self):
         return self._wallets.copy()
 
-    # --- Методы ---
     def add_currency(self, currency_code):
         if currency_code in self._wallets:
             raise ValueError(f'Кошелёк для {currency_code} уже существует.')

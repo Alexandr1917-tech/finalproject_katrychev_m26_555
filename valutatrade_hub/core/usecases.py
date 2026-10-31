@@ -1,10 +1,13 @@
 import hashlib
 from datetime import datetime, timedelta
 
+from valutatrade_hub.core.currencies import get_currency
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    InsufficientFundsError,
+)
 from valutatrade_hub.core.models import User
 from valutatrade_hub.core.utils import (
-    META_FILE,
-    PORTFOLIO_FILE,
     load_json,
     load_portfolio,
     load_rates,
@@ -13,17 +16,21 @@ from valutatrade_hub.core.utils import (
     save_rates,
     save_session,
 )
+from valutatrade_hub.decorators import log_action
+from valutatrade_hub.infra.settings import SettingsLoader
 
 USER_ID = 1
 
+
+settings = SettingsLoader()
 
 def register_user(username, password):
     if not username or not username.strip():
         raise ValueError("Имя пользователя не может быть пустым.")
     if len(password) < 4:
         raise ValueError("Пароль должен быть не короче 4 символов.")
-
-    users = load_json(META_FILE, default=[])
+    
+    users = load_json(settings.get("USERS_FILE"), default=[]) # загружаем через Singleton # noqa: E501
     if any(u["username"] == username for u in users):
         raise ValueError(f"Имя пользователя '{username}' уже занято")
 
@@ -38,16 +45,16 @@ def register_user(username, password):
         "registration_date": user.registration_date.isoformat(),
     }
     users.append(user_dict)
-    save_json(META_FILE, users)
+    save_json(settings.get("USERS_FILE"), users)
 
-    portfolios = load_json(PORTFOLIO_FILE, default=[])
+    portfolios = load_json(settings.get("PORTFOLIOS_FILE"), default=[])
     portfolios.append({"user_id": user_id, "wallets": {}})
-    save_json(PORTFOLIO_FILE, portfolios)
+    save_json(settings.get("PORTFOLIOS_FILE"), portfolios)
 
     return user
 
 def login_user(username, password):
-    users = load_json(META_FILE, default=[])
+    users = load_json(settings.get("USERS_FILE"), default=[])
     user_data = next((u for u in users if u["username"] == username), None)
 
     if user_data is None:
@@ -100,28 +107,16 @@ def get_portfolio_info(base_currency="USD"):
         "items": items,
         "total": total,
     }
-
-def buy_currency(currency_code, amount, base_currency="USD"):
-    user_id = load_session()
-    if user_id is None:
-        raise ValueError("Сначала выполните login")
-
+@log_action("BUY")
+def buy_currency(user_id, currency_code, amount, base_currency="USD"):
+    """Покупает валюту: пополняет кошелёк и сохраняет изменения."""
     if not isinstance(amount, (int, float)) or amount <= 0:
         raise ValueError("'amount' должен быть положительным числом")
-    if not currency_code or not currency_code.strip():
-        raise ValueError("Код валюты не может быть пустым")
-    currency_code = currency_code.upper()
 
-    exchange_rates = {
-        "USD": 1.0,
-        "EUR": 1.1,
-        "BTC": 50000.0,
-        "ETH": 3000.0,
-    }
-    if currency_code not in exchange_rates:
-        raise ValueError(f"Не удалось получить курс для {currency_code}->{base_currency}") # noqa: E501
+    currency_code = currency_code.strip().upper()
+    get_currency(currency_code) 
 
-    portfolios = load_json(PORTFOLIO_FILE, default=[])
+    portfolios = load_json(settings.get("PORTFOLIOS_FILE"), default=[])
     portfolio = next((p for p in portfolios if p["user_id"] == user_id), None)
     if portfolio is None:
         portfolio = {"user_id": user_id, "wallets": {}}
@@ -132,9 +127,10 @@ def buy_currency(currency_code, amount, base_currency="USD"):
     new_balance = old_balance + amount
     wallets[currency_code] = {"balance": new_balance}
 
-    save_json(PORTFOLIO_FILE, portfolios)
+    save_json(settings.get("PORTFOLIOS_FILE"), portfolios)
 
-    rate = exchange_rates[currency_code]
+    rate_data = get_rate(currency_code, base_currency)
+    rate = rate_data["rate"]
     cost = amount * rate
 
     return {
@@ -145,6 +141,7 @@ def buy_currency(currency_code, amount, base_currency="USD"):
         "rate": rate,
         "cost": cost,
         "base_currency": base_currency,
+        "username": None, 
     }
 
 DEFAULT_RATES = {
@@ -154,51 +151,82 @@ DEFAULT_RATES = {
     "ETH": 3720.00,
 }
 
-def get_rate(from_currency, to_currency):
-    if not from_currency or not from_currency.strip():
-        raise ValueError("Код исходной валюты не может быть пустым")
-    if not to_currency or not to_currency.strip():
-        raise ValueError("Код целевой валюты не может быть пустым")
+def get_rate(from_code, to_code):
+    """Возвращает курс from -> to (с кэшем на 5 минут)."""
+    from_code = from_code.strip().upper()
+    to_code = to_code.strip().upper()
 
-    from_currency = from_currency.upper()
-    to_currency = to_currency.upper()
+    get_currency(from_code)
+    get_currency(to_code)
 
-    pair_key = f"{from_currency}_{to_currency}"
-    reverse_key = f"{to_currency}_{from_currency}"
-
+    pair_key = f"{from_code}_{to_code}"
+    reverse_key = f"{to_code}_{from_code}"
     rates = load_rates()
 
     if pair_key in rates:
         cached = rates[pair_key]
         updated_at = datetime.fromisoformat(cached["updated_at"])
-        if datetime.now() - updated_at < timedelta(minutes=5):
+        if datetime.now() - updated_at < timedelta(seconds=settings.get("RATES_TTL_SECONDS")): # noqa: E501
             return {
                 "rate": cached["rate"],
                 "updated_at": cached["updated_at"],
                 "reverse_rate": rates.get(reverse_key, {}).get("rate"),
             }
 
-    if from_currency not in DEFAULT_RATES or to_currency not in DEFAULT_RATES:
-        raise ValueError(f"Курс {from_currency}->{to_currency} недоступен. Повторите попытку позже.") # noqa: E501
+    if from_code not in DEFAULT_RATES or to_code not in DEFAULT_RATES:
+        raise ApiRequestError(f"Курс {from_code}->{to_code} недоступен. Повторите попытку позже.") # noqa: E501
 
-    rate = DEFAULT_RATES[from_currency] / DEFAULT_RATES[to_currency]
-
+    rate = DEFAULT_RATES[from_code] / DEFAULT_RATES[to_code]
     now = datetime.now()
-    rates[pair_key] = {
-        "rate": rate,
-        "updated_at": now.isoformat(),
-    }
-    rates[reverse_key] = {
-        "rate": 1.0 / rate if rate != 0 else 0.0,
-        "updated_at": now.isoformat(),
-    }
+    rates[pair_key] = {"rate": rate, "updated_at": now.isoformat()}
+    rates[reverse_key] = {"rate": 1.0 / rate if rate != 0 else 0.0, "updated_at": now.isoformat()} # noqa: E501
     rates["source"] = "ParserService"
     rates["last_refresh"] = now.isoformat()
-
     save_rates(rates)
 
     return {
         "rate": rate,
         "updated_at": now.isoformat(),
         "reverse_rate": rates[reverse_key]["rate"],
+    }
+
+@log_action("SELL")
+def sell_currency(user_id, currency_code, amount, base_currency="USD"):
+    """Продаёт валюту: списывает с кошелька и сохраняет."""
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        raise ValueError("'amount' должен быть положительным числом")
+
+    currency_code = currency_code.strip().upper()
+    get_currency(currency_code)
+
+    portfolios = load_json(settings.get("PORTFOLIOS_FILE"), default=[])
+    portfolio = next((p for p in portfolios if p["user_id"] == user_id), None)
+    if portfolio is None:
+        raise InsufficientFundsError(
+            f"Недостаточно средств: доступно 0.00 {currency_code}, требуется {amount:.2f} {currency_code}"  # noqa: E501
+        )
+
+    wallets = portfolio["wallets"]
+    old_balance = wallets.get(currency_code, {}).get("balance", 0.0)
+    if amount > old_balance:
+        raise InsufficientFundsError(
+            f"Недостаточно средств: доступно {old_balance:.2f} {currency_code}, требуется {amount:.2f} {currency_code}"  # noqa: E501
+        )
+
+    new_balance = old_balance - amount
+    wallets[currency_code] = {"balance": new_balance}
+    save_json(settings.get("PORTFOLIOS_FILE"), portfolios)
+
+    rate_data = get_rate(currency_code, base_currency)
+    rate = rate_data["rate"]
+    cost = amount * rate
+
+    return {
+        "currency_code": currency_code,
+        "amount": amount,
+        "old_balance": old_balance,
+        "new_balance": new_balance,
+        "rate": rate,
+        "cost": cost,
+        "base_currency": base_currency,
     }

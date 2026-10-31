@@ -1,13 +1,19 @@
 import argparse
 
+from valutatrade_hub.core.exceptions import (
+    ApiRequestError,
+    CurrencyNotFoundError,
+    InsufficientFundsError,
+)
 from valutatrade_hub.core.usecases import (
     buy_currency,
     get_portfolio_info,
     get_rate,
     login_user,
     register_user,
+    sell_currency,
 )
-from valutatrade_hub.core.utils import META_FILE, load_json
+from valutatrade_hub.core.utils import META_FILE, load_json, load_session
 
 
 def cmd_register(args):
@@ -45,28 +51,72 @@ def cmd_show_portfolio(args):
         print(f"Ошибка: {e}")
 
 def cmd_buy(args):
+    user_id = load_session()
+    if user_id is None:
+        print("Ошибка: Сначала выполните login")
+        return
+
     try:
-        result = buy_currency(args.currency, args.amount)
+        result = buy_currency(user_id, args.currency, args.amount)
         print(f"Покупка выполнена: {result['amount']:.4f} {result['currency_code']} "
               f"по курсу {result['rate']:.2f} {result['base_currency']}/{result['currency_code']}") # noqa: E501
         print("Изменения в портфеле:")
         print(f"- {result['currency_code']}: было {result['old_balance']:.4f} "
               f"-> стало {result['new_balance']:.4f}")
         print(f"Оценочная стоимость покупки: {result['cost']:.2f} {result['base_currency']}") # noqa: E501
+    except CurrencyNotFoundError as e:
+        print(f"Ошибка: {e}")
+        print("Подсказка: используйте команду `get-rate` для проверки курса.")
+    except InsufficientFundsError as e:
+        print(f"Ошибка: {e}")
+    except ApiRequestError as e:
+        print(f"Ошибка: {e}")
+        print("Подсказка: проверьте соединение или повторите позже.")
     except ValueError as e:
-        print(f"Ошибка: {e}") 
+        print(f"Ошибка: {e}")
 
 def cmd_get_rate(args):
     try:
         result = get_rate(args.from_currency, args.to_currency)
         updated_at = result["updated_at"].replace("T", " ")[:19]
-        print(f"Курс {args.from_currency.upper()}->{args.to_currency.upper()}: {result['rate']:.8f} " # noqa: E501
-              f"(обновлено: {updated_at})")
+        print(f"Курс {args.from_currency.upper()}->{args.to_currency.upper()}: "
+              f"{result['rate']:.8f} (обновлено: {updated_at})")
         if result["reverse_rate"]:
             print(f"Обратный курс {args.to_currency.upper()}->{args.from_currency.upper()}: " # noqa: E501
                   f"{result['reverse_rate']:.2f}")
+    except CurrencyNotFoundError as e:
+        print(f"Ошибка: {e}")
+        print("Подсказка: проверьте доступные коды валют (USD, EUR, BTC, ETH).")
+    except ApiRequestError as e:
+        print(f"Ошибка: {e}")
+        print("Подсказка: проверьте соединение или повторите позже.")
     except ValueError as e:
-        print(f"Ошибка: {e}")               
+        print(f"Ошибка: {e}")   
+
+def cmd_sell(args):
+    user_id = load_session()
+    if user_id is None:
+        print("Ошибка: Сначала выполните login")
+        return
+
+    try:
+        result = sell_currency(user_id, args.currency, args.amount)
+        print(f"Продажа выполнена: {result['amount']:.4f} {result['currency_code']} "
+              f"по курсу {result['rate']:.2f} {result['base_currency']}/{result['currency_code']}") # noqa: E501
+        print("Изменения в портфеле:")
+        print(f"- {result['currency_code']}: было {result['old_balance']:.4f} "
+              f"-> стало {result['new_balance']:.4f}")
+        print(f"Оценочная стоимость продажи: {result['cost']:.2f} {result['base_currency']}") # noqa: E501
+    except CurrencyNotFoundError as e:
+        print(f"Ошибка: {e}")
+        print("Подсказка: проверьте доступные коды валют (USD, EUR, BTC, ETH).")
+    except InsufficientFundsError as e:
+        print(f"Ошибка: {e}")
+    except ApiRequestError as e:
+        print(f"Ошибка: {e}")
+        print("Подсказка: проверьте соединение или повторите позже.")
+    except ValueError as e:
+        print(f"Ошибка: {e}")                   
 
 def build_parser():
     parser = argparse.ArgumentParser(prog="wallet")
@@ -91,6 +141,10 @@ def build_parser():
     p_get.add_argument("--from", dest="from_currency", required=True, help="Исходная валюта") # noqa: E501
     p_get.add_argument("--to", dest="to_currency", required=True, help="Целевая валюта")
     p_get.set_defaults(func=cmd_get_rate)
+    p_sell = subparsers.add_parser("sell", help="Продать валюту")
+    p_sell.add_argument("--currency", required=True, help="Код валюты")
+    p_sell.add_argument("--amount", required=True, type=float, help="Количество валюты")
+    p_sell.set_defaults(func=cmd_sell)
 
     return parser
 
