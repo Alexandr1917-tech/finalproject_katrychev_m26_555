@@ -1,4 +1,6 @@
 import argparse
+import json
+import os
 
 from valutatrade_hub.core.exceptions import (
     ApiRequestError,
@@ -14,6 +16,12 @@ from valutatrade_hub.core.usecases import (
     sell_currency,
 )
 from valutatrade_hub.core.utils import META_FILE, load_json, load_session
+from valutatrade_hub.parser_service import storage
+from valutatrade_hub.parser_service.api_clients import (  # noqa: E501
+    CoinGeckoClient,
+    ExchangeRateApiClient,
+)
+from valutatrade_hub.parser_service.updater import RatesUpdater
 
 
 def cmd_register(args):
@@ -118,6 +126,67 @@ def cmd_sell(args):
     except ValueError as e:
         print(f"Ошибка: {e}")                   
 
+
+def cmd_update_rates(args):
+    clients = []
+    if args.source == "coingecko":
+        clients = [CoinGeckoClient()]
+    elif args.source == "exchangerate":
+        clients = [ExchangeRateApiClient()]
+    else:
+        clients = [CoinGeckoClient(), ExchangeRateApiClient()]
+
+    updater = RatesUpdater(clients, storage)
+
+    try:
+        print("INFO: Starting rates update...")
+        result = updater.run_update()
+        
+        if not result:
+            print("ERROR: Не удалось обновить курсы. Проверьте логи.")
+            return
+
+        print(f"Update successful. Total rates updated: {result['total_rates']}. Last refresh: {result['timestamp']}")  # noqa: E501
+    except ApiRequestError as e:
+        print(f"ERROR: Failed to fetch data: {e}")
+
+def cmd_show_rates(args):
+    cache_file = "data/rates.json"
+    if not os.path.exists(cache_file):
+        print("Локальный кеш курсов пуст. Выполните 'update-rates', чтобы загрузить данные.") # noqa: E501
+        return
+    
+    try:
+        with open(cache_file, "r", encoding="utf-8") as f:
+            cache_data = json.load(f)
+            pairs = cache_data.get("pairs", {})
+            last_refresh = cache_data.get("last_refresh", "unknown")
+    except (json.JSONDecodeError, OSError):
+        print("Ошибка чтения кеша.")
+        return
+
+    if not pairs:
+        print("Локальный кеш курсов пуст. Выполните 'update-rates', чтобы загрузить данные.") # noqa: E501
+        return
+
+    if args.currency:
+        currency_upper = args.currency.upper()
+        target_pair = f"{currency_upper}_USD"
+        if target_pair in pairs:
+            pairs = {target_pair: pairs[target_pair]}
+        else:
+            print(f"Курс для '{args.currency.upper()}' не найден в кеше.")
+            return
+
+    sorted_pairs = sorted(pairs.items(), key=lambda x: x[1]["rate"], reverse=True)
+    
+    if args.top:
+        sorted_pairs = sorted_pairs[:args.top]
+
+    print(f"Rates from cache (updated at {last_refresh}):")
+    for pair, info in sorted_pairs:
+        print(f"- {pair}: {info['rate']}")        
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="wallet")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -145,6 +214,14 @@ def build_parser():
     p_sell.add_argument("--currency", required=True, help="Код валюты")
     p_sell.add_argument("--amount", required=True, type=float, help="Количество валюты")
     p_sell.set_defaults(func=cmd_sell)
+    p_update = subparsers.add_parser("update-rates", help="Обновить курсы валют")
+    p_update.add_argument("--source", choices=["coingecko", "exchangerate"], required=False, help="Источник курсов") # noqa: E501
+    p_update.set_defaults(func=cmd_update_rates)
+    p_show_rates = subparsers.add_parser("show-rates", help="Показать актуальные курсы")
+    p_show_rates.add_argument("--currency", type=str, help="Код валюты")
+    p_show_rates.add_argument("--top", type=int, help="Количество топовых криптовалют")
+    p_show_rates.add_argument("--base", type=str, help="Базовая валюта (например, EUR)")
+    p_show_rates.set_defaults(func=cmd_show_rates)
 
     return parser
 
