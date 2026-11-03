@@ -14,12 +14,15 @@ RATES_CACHE_FILE = "data/rates.json"
 
 
 class RatesUpdater:
-    def __init__(self, clients, storage_module):
+    """Координатор процесса обновления курсов: сбор, сохранение и кэширование.""" # noqa: E501
 
+    def __init__(self, clients, storage_module):
+        """Инициализирует обновлятор списком API-клиентов и модулем хранилища."""
         self.clients = clients
         self.storage = storage_module
 
     def run_update(self):
+        """Выполняет полный цикл обновления курсов от всех клиентов и записывает их в кэш.""" # noqa: E501
         logger.info("Начало обновления курсов...")
 
         all_rates = {}

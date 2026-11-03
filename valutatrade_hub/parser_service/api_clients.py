@@ -1,3 +1,4 @@
+"""Клиенты для работы с внешними API (CoinGecko и ExchangeRate-API)."""
 from abc import ABC, abstractmethod
 
 import requests
@@ -7,13 +8,19 @@ from valutatrade_hub.parser_service.config import config
 
 
 class BaseApiClient(ABC):
+    """Абстрактный базовый класс для всех API-клиентов."""
     
     @abstractmethod
     def fetch_rates(self) -> dict:
+        """Получает курсы валют из внешнего источника и возвращает их в стандартном формате."""  # noqa: E501
         pass
 
+
 class CoinGeckoClient(BaseApiClient):
+    """Клиент для получения курсов криптовалют с CoinGecko."""
+
     def fetch_rates(self) -> dict:
+        """Запрашивает курсы криптовалют к USD и возвращает словарь вида {'BTC_USD': 59000}.""" # noqa: E501
         ids = ",".join(config.CRYPTO_ID_MAP.values())
         params = {
             "ids": ids,
@@ -46,8 +53,12 @@ class CoinGeckoClient(BaseApiClient):
 
         return result    
 
+
 class ExchangeRateApiClient(BaseApiClient):
+    """Клиент для получения курсов фиатных валют с ExchangeRate-API."""
+
     def fetch_rates(self) -> dict:
+        """Запрашивает курсы фиатных валют к USD и возвращает словарь вида {'EUR_USD': 1.08}.""" # noqa: E501
         if not config.EXCHANGE_RATE_API_KEY:
             return {"EUR_USD": 1.08, "RUB_USD": 0.01, "GBP_USD": 1.27}
 
@@ -78,6 +89,4 @@ class ExchangeRateApiClient(BaseApiClient):
             if code in rates:
                 result[f"{code}_USD"] = rates[code]
 
-        return result    
-
-    
+        return result

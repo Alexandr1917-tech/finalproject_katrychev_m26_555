@@ -1,7 +1,7 @@
 [project]
 name = "valutatrade-hub"
 version = "0.1.0"
-description = "Add your description here"
+description = "Final Project"
 readme = "README.md"
 authors = [
     { name = "Aleksandr", email = "acatrychev@yandex.ru" }

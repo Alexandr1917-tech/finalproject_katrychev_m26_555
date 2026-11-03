@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import os
 
 from valutatrade_hub.core.exceptions import (
@@ -23,6 +24,7 @@ from valutatrade_hub.parser_service.api_clients import (  # noqa: E501
 )
 from valutatrade_hub.parser_service.updater import RatesUpdater
 
+logger = logging.getLogger(__name__)
 
 def cmd_register(args):
     try:
@@ -139,14 +141,14 @@ def cmd_update_rates(args):
     updater = RatesUpdater(clients, storage)
 
     try:
-        print("INFO: Starting rates update...")
+        logger.info("INFO: Starting rates update...")
         result = updater.run_update()
         
         if not result:
             print("ERROR: Не удалось обновить курсы. Проверьте логи.")
             return
 
-        print(f"Update successful. Total rates updated: {result['total_rates']}. Last refresh: {result['timestamp']}")  # noqa: E501
+        logger.error(f"Update successful. Total rates updated: {result['total_rates']}. Last refresh: {result['timestamp']}")  # noqa: E501
     except ApiRequestError as e:
         print(f"ERROR: Failed to fetch data: {e}")
 
@@ -178,14 +180,30 @@ def cmd_show_rates(args):
             print(f"Курс для '{args.currency.upper()}' не найден в кеше.")
             return
 
+    if args.base:
+        base_upper = args.base.upper()
+        base_pair = f"{base_upper}_USD"
+        if base_pair not in pairs:
+            print(f"Базовая валюта {base_upper} не найдена в кеше.")
+            return
+        
+        base_rate = pairs[base_pair]["rate"]
+        new_pairs = {}
+        for pair, info in pairs.items():
+            new_pairs[pair] = {
+                "rate": info["rate"] / base_rate,
+                "updated_at": info["updated_at"],
+                "source": info["source"]
+            }
+        pairs = new_pairs
+
     sorted_pairs = sorted(pairs.items(), key=lambda x: x[1]["rate"], reverse=True)
-    
     if args.top:
         sorted_pairs = sorted_pairs[:args.top]
 
     print(f"Rates from cache (updated at {last_refresh}):")
     for pair, info in sorted_pairs:
-        print(f"- {pair}: {info['rate']}")        
+        print(f"- {pair}: {info['rate']:.4f}")       
 
 def build_parser():
     parser = argparse.ArgumentParser(prog="wallet")
