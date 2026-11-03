@@ -89,5 +89,10 @@ Update successful. Total rates updated: 6. Last refresh: 2026-11-03T16:25:33Z
 Rates from cache (updated at 2026-11-03T16:25:33Z):
 - BTC_USD: 77316.0000
 - ETH_USD: 2284.8200
+(wallet) aleksandr@MacBook-Air-Aleksandr finalproject_katrychev_m26_555 % uv run python main.py sell --currency BTC --amount 1000
+Ошибка: Недостаточно средств: доступно 0.40 BTC, требуется 1000.00 BTC
+(wallet) aleksandr@MacBook-Air-Aleksandr finalproject_katrychev_m26_555 % uv run python main.py buy --currency DOGE --amount 10
+Ошибка: Валюта с кодом 'DOGE' не найдена.
+Подсказка: используйте команду `get-rate` для проверки курса.
 ```
 
